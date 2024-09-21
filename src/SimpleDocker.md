@@ -402,7 +402,7 @@ int main(void) {
   - **netplan** : `apt install net-tools`.
   - **ps** : `apt install procps`.
 
-<details><summary>Процесс установки утилит.</summary>
+<details><summary><strong>Процесс установки утилит.</strong></summary>
 
 > ![Update](screen%2Fscreen_3_04.png)
 > ![Установка gcc](screen%2Fscreen_3_05.png)
@@ -423,7 +423,7 @@ int main(void) {
 >
 
 - Вышел из контейнера командой `exit`.
-- Копировал написанный мини-сервер в директорию `server` внутрь контейнера.
+- Скопировал написанный мини-сервер в директорию `server` внутрь контейнера.
 
 > Копирование `mini_server.c` внутрь контейнера:
 >
@@ -467,7 +467,7 @@ http {
 }
 ```
 
-- Копировал написанный файл `nginx.conf` внутрь контейнера.
+- Скопировал написанный файл `nginx.conf` внутрь контейнера.
 
 > Копирование `nginx.conf` внутрь контейнера:
 >
@@ -505,7 +505,7 @@ http {
 > ![Успешно отданная страница](screen%2Fscreen_3_19.png)
 >
 
-<details><summary>Описание процесса получения страницы.</summary>
+<details><summary><strong>Описание процесса получения страницы.</strong></summary>
 
 **Когда мы переходим в браузере по адресу `localhost:81`, браузер отправляет HTTP-запрос на `nginx`, который прослушивает порт `81` согласно нашей конфигурации.**
 
@@ -526,13 +526,270 @@ http {
 ----------------------------------------------------------------------------
 
 ## 4. Свой докер:
+- Написал свой докер-образ:
+
+```dockerfile
+# Первый этап: Компиляция mini_server
+FROM gcc:latest AS builder
+
+# Скопируем файл mini_server.c в контейнер
+COPY server/mini_server.c /mini_server.c
+
+# Устанавливаем необходимые библиотеки для FastCGI и компилируем mini_server в одном RUN
+RUN apt-get update && \
+    apt-get install -y libfcgi-dev && \
+    gcc -o my_fcgi_mini_server /mini_server.c -lfcgi
+
+# Второй этап: Настройка контейнера с Nginx и FastCGI сервером
+FROM nginx:latest
+
+# Устанавливаем spawn-fcgi и libfcgi и создаем директорию "server"
+RUN apt-get update && \
+    apt-get install -y spawn-fcgi libfcgi && \
+    mkdir "server"
+
+# Копируем скомпилированный сервер из предыдущего этапа
+COPY --from=builder /my_fcgi_mini_server /server/my_fcgi_mini_server
+
+# Копируем конфигурационный файл nginx
+COPY ./nginx/nginx.conf /etc/nginx/nginx.conf
+
+# Запускаем написанный мини-сервер через spawn-fcgi на порту 8080 и включаем nginx на переднем плане
+CMD ["sh", "-c", "spawn-fcgi -a 127.0.0.1 -p 8080 /server/my_fcgi_mini_server && nginx -g 'daemon off;'"]
+```
+- Собрал написанный докер-образ указав имя `my_fastcgi_server` и тег `v1.0` командой `docker build -t my_fastcgi_server:v1.0 .`.
+- Проверил наличие собранного докер-образа командой `docker images`.
+
+> Сборка докер-образа:
+>
+> ![Сборка докер-образ](screen%2Fscreen_4_01.png)
+>
+
+- Запустил собранный докер-образ указав имя контейнера `onionyas_server`, с маппингом `81` порта на `80` на хостовой машине и маппингом файла `./nginx/nginx.conf` внутрь контейнера по адресу, где лежит конфигурационный файл `nginx.conf` командой `docker run -d --name onionyas_server -p 80:81 -v ${PWD}/nginx/nginx.conf:/etc/nginx/nginx.conf my_fastcgi_server:v1.0`.
+- Проверил запуск контейнера командой `docker ps`.
+
+> Запуск контейнера:
+>
+> ![Запуск контейнера](screen%2Fscreen_4_02.png)
+>
+
+- Проверил, что по адресу `localhost:80` доступна страничка написанного мини сервера.
+
+> Страница по адресу `localhost:80` в браузере:
+>
+> ![Страница по адресу localhost:80 в браузере](screen%2Fscreen_4_03.png)
+>
+
+- Дописал в `./nginx/nginx.conf` проксирование странички `/status`.
+
+> Измененный файл `nginx.conf`:
+>
+> ![Измененный файл nginx.conf](screen%2Fscreen_4_04.png)
+>
+
+- Перезапустил докер контейнер командой `docker restart [CONTAINER_NAME]`.
+
+> Перезапуск докер контейнера:
+>
+> ![Перезапуск докер контейнера](screen%2Fscreen_4_05.png)
+>
+
+- Проверил, что по адресу `localhost:80/status` отдается страничка со статусом **nginx**.
+
+> Страница по адресу `localhost:80/status` в браузере:
+>
+> ![Страница по адресу localhost:80/status в браузере](screen%2Fscreen_4_06.png)
+>
 
 ----------------------------------------------------------------------------
 
 ## 5. Dockle:
+- Запустил `wsl` и установил на него утилиту `dockle`.
+- Просканировал образ из предыдущего задания командой `dockle my_fastcgi_server:v1.0`.
+
+> Вывод команды `dockle my_fastcgi_server:v1.0`:
+>
+> ![Вывод команды dockle my_fastcgi_server:v1.0](screen%2Fscreen_5_01.png)
+>
+
+**Сообщения от Dockle показывают несколько предупреждений и ошибок безопасности:**:
+
+<details><summary><strong>FATAL ошибки:</strong></summary>
+
+- `CIS-DI-0010` : **Do not store credential in environment variables/files** (Не храните учетные данные в переменных окружения/файлах).
+
+  Переменная `NGINX_GPGKEYS` хранит ключи `GPG` в `ENV`, что небезопасно.
+- `DKL-DI-0005` : **Clear apt-get caches** (Очистите кэш apt-get).
+
+  После установки пакетов через `apt-get install` не очищен кэш. Это увеличивает размер образа.
+
+</details>
+
+<details><summary><strong>WARN предупреждения:</strong></summary>
+
+- `CIS-DI-0001` : **Create a user for the container** (Создайте пользователя для контейнера).
+
+  В данный момент все команды выполняются от имени пользователя `root`.
+
+</details>
+
+<details><summary><strong>INFO предупреждения:</strong></summary>
+
+- `CIS-DI-0005` : **Enable Content trust for Docker** (Включите Content Trust для Docker).
+<br><br>
+- `CIS-DI-0006` : **Add HEALTHCHECK instruction to the container image** (Добавьте инструкцию `HEALTHCHECK`).
+<br><br>
+- `CIS-DI-0008`: **Confirm safety of setuid/setgid files** (Подтвердите безопасность `setuid/setgid` файлов).
+
+</details>
+
+- Исправил `dockerfile`:.
+
+```dockerfile
+# Первый этап: Компиляция mini_server
+FROM gcc:latest AS builder
+
+# Скопируем файл mini_server.c в контейнер
+COPY server/mini_server.c /mini_server.c
+
+# Устанавливаем необходимые библиотеки для FastCGI и компилируем mini_server в одном RUN
+RUN apt-get update && \
+    apt-get install -y libfcgi-dev && \
+    gcc -o my_fcgi_mini_server /mini_server.c -lfcgi
+
+# Второй этап: Настройка контейнера с Nginx и FastCGI сервером
+FROM nginx:latest
+
+# Устанавливаем необходимые пакеты и настраиваем права от имени root
+RUN apt-get update && apt-get install -y gcc spawn-fcgi libfcgi-dev && \
+    chown -R nginx:nginx /etc/nginx/nginx.conf && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    touch /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/run/nginx.pid; \
+    chmod u-s /usr/bin/passwd /usr/bin/su /usr/bin/gpasswd && \
+    chmod u-s /usr/bin/newgrp /usr/bin/chsh /usr/bin/umount /usr/bin/mount && \
+    chmod u-s /usr/bin/chfn && \
+    chmod g-s /usr/bin/expiry /usr/bin/chage /usr/sbin/unix_chkpwd && \
+    rm -rf /var/lib/apt/lists
+
+# Копируем скомпилированный сервер из предыдущего этапа
+COPY --from=builder /my_fcgi_mini_server /server/my_fcgi_mini_server
+
+# Копируем конфигурационный файл nginx
+COPY ./nginx/nginx.conf /etc/nginx/nginx.conf
+
+# Устанавливаем права на запуск сервера
+RUN chmod +x /server/my_fcgi_mini_server && chown nginx:nginx /server/my_fcgi_mini_server
+
+# Переключаемся на пользователя nginx
+USER nginx
+
+# Включаем Content Trust для Docker
+ENV DOCKER_CONTENT_TRUST=1
+
+# Добовляем инструкцию HEALTHCHECK для проверки состояния сервера
+HEALTHCHECK NONE
+
+# Запускаем написанный мини-сервер через spawn-fcgi на порту 8080 и включаем nginx на переднем плане
+CMD ["sh", "-c", "spawn-fcgi -a 127.0.0.1 -p 8080 /server/my_fcgi_mini_server && nginx -g 'daemon off;'"]
+```
+
+- Собрал исправленный докер-образ указав имя `my_fastcgi_server` и тег `v2.0` командой `docker build -t my_fastcgi_server:v2.0 .`.
+
+> Сборка исправленного докер-образа:
+>
+> ![Сборка исправленного докер-образа](screen%2Fscreen_5_02.png)
+>
+
+- Просканировал образ командой ` dockle -ak NGINX_GPGKEY_PATH -ak NGINX_GPGKEY my_fastcgi_server:v2.0`.
+
+*Аргументы `-ak` в `Dockle` используются для указания переменных окружения, которые нужно игнорировать при проверке безопасности образа. `-ak NGINX_GPGKEY_PATH` и `-ak NGINX_GPGKEY` указывает `Dockle` не обращать внимания на потенциальные проблемы, связанные с этими переменными.*
+
+**Т.к. мы уверены, что хранение этих переменных в образе безопасно и не представляет угрозы безопасности.**
+
+> Просканированный образ `my_fastcgi_server:v2.0` без ошибок:
+>
+> ![Просканированный образ my_fastcgi_server:v2.0 без ошибок](screen%2Fscreen_5_03.png)
+>
 
 ----------------------------------------------------------------------------
 
 ## 6. Базовый Docker Compose:
+- Написал файл `docker-compose.yml`, который поднимает докер-контейнер из [задания 5](#5-dockle) и докер-контейнер с **nginx** (с мапингом `8080` порта на `80` порт локальной машины):
+
+```yml
+version: '3.8'  # Версия Docker Compose, которая будет использоваться.
+
+services:
+  # Первый контейнер с FastCGI-сервером
+  fastcgi_server:
+    build:
+      context: . 
+      dockerfile: Dockerfile  # Указываем Dockerfile для сборки образа.
+    container_name: onionyas_fcgi  # Имя контейнера.
+    networks:
+      - internal_network  # Контейнер будет подключен сети internal_network, для взаимодействия с другими контейнерами в этой сети.
+
+  # Второй контейнер с Nginx, который проксирует запросы на FastCGI
+  nginx_proxy:
+    image: nginx:latest  # Используем официальный образ Nginx с Docker Hub (последняя версия).
+    container_name: onionyas_nginx  # Имя контейнера
+    networks:
+      - internal_network  # Контейнер также подключен к той же сети internal_network, чтобы он мог отправлять запросы на `fastcgi_server`.
+    ports:
+      - "80:8080"  # Маппинг портов: внешний порт 80 на хост-машине перенаправляется на порт 8080 внутри контейнера Nginx.
+    volumes:
+      - ./part6/nginx/nginx.conf:/etc/nginx/nginx.conf  # Мапинг файла `nginx.conf` в контейнер.
+    depends_on:
+      - fastcgi_server  # Гарантируем, что контейнер `nginx_proxy` не начнет работу до тех пор, пока контейнер `fastcgi_server` не будет готов.
+    command: ["nginx", "-g", "daemon off;"]  # Включаем nginx на переднем плане.
+    extra_hosts:
+      - "localhost:host-gateway"  # Добавляем запись в файл `/etc/hosts`, которая позволяет контейнеру обращаться к хосту через `localhost`.
+
+networks:
+  internal_network:
+    driver: bridge  # Определяем тип сети. В данном случае используется мостовая сеть (bridge), что создает изолированную сеть для взаимодействия контейнеров между собой.
+```
+
+- Написал `nginx.conf` для контейнера **nginx**, в котором указал проксировать все запросы с `8080` порта на `81` порт первого контейнера.
+
+
+> Файл `part6/nginx/nginx.conf`:
+>
+> ![Файл part6/nginx/nginx.conf](screen%2Fscreen_6_01.png)
+>
+
+- Остановил все запущенные контейнеры, и проверив командой `docker ps`.
+- Собрал проект командой `docker compose build`.
+
+> Сборка проекта:
+>
+> ![Сборка проекта](screen%2Fscreen_6_02.png)
+>
+
+- Запустил проект командой `docker-compose up -d`.
+
+*Флаг `-d` : запускает контейнеры в фоновом режиме.*
+
+- Проверил запуск командой `docker-compose ps`.
+
+> Запуск проекта:
+>
+> ![Запуск проекта](screen%2Fscreen_6_03.png)
+>
+
+- Проверил, что в браузере по пути `localhost:80` и `localhost:80/status` отдаются нужные страницы.
+
+
+> Страница по адресу `localhost:80` в браузере:
+>
+> ![Страница по адресу localhost:80 в браузере](screen%2Fscreen_6_04.png)
+>
+
+
+> Страница по адресу `localhost:80/status` в браузере:
+>
+> ![Страница по адресу localhost:80/status в браузере](screen%2Fscreen_6_05.png)
+>
 
 ----------------------------------------------------------------------------
